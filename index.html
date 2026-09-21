@@ -7,7 +7,7 @@
     <meta name="description" content="친구들과 주간 공부시간을 계획하고 공유하는 모바일 시간표" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="./styles.css?v=4" />
+    <link rel="stylesheet" href="./styles.css?v=6" />
     <title>공부불씨</title>
   </head>
   <body>
@@ -21,8 +21,9 @@
         <button id="openSettings" class="icon-button" type="button" aria-label="설정 열기">⚙</button>
       </div>
       <div class="group-row">
-        <div>
+        <div class="group-identity">
           <strong id="groupName">나의 공부방</strong>
+          <select id="groupSwitcher" class="group-switcher" aria-label="현재 그룹 선택" hidden></select>
           <span id="connectionBadge" class="status-badge demo">체험 모드</span>
         </div>
         <button id="inviteButton" class="secondary-button" type="button">초대링크</button>
@@ -157,6 +158,7 @@
         </div>
         <div class="danger-zone">
           <button id="resetSchedule" type="button" class="text-button danger">내 시간표 기본값으로 초기화</button>
+          <button id="leaveGroupButton" type="button" class="text-button danger" hidden>현재 그룹 나가기</button>
         </div>
         <div class="dialog-actions end">
           <button class="primary-button" value="save">저장</button>
@@ -188,7 +190,24 @@
       </form>
     </dialog>
 
+    <dialog id="leaveDialog" class="app-dialog leave-dialog">
+      <form method="dialog" id="leaveForm">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">되돌릴 수 없는 작업</p>
+            <h2>그룹에서 나갈까요?</h2>
+          </div>
+          <button class="icon-button" value="cancel" aria-label="닫기">×</button>
+        </div>
+        <p id="leaveWarning" class="leave-warning"></p>
+        <div class="dialog-actions leave-actions">
+          <button class="secondary-button" value="cancel">아니요</button>
+          <button id="confirmLeave" class="danger-button" type="button">예</button>
+        </div>
+      </form>
+    </dialog>
+
     <script src="./config.js?v=2"></script>
-    <script type="module" src="./app.js?v=5"></script>
+    <script type="module" src="./app.js?v=6"></script>
   </body>
 </html>

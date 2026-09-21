@@ -55,6 +55,21 @@ button { cursor: pointer; }
 
 .brand-row { max-width: 1100px; margin: 0 auto; }
 .group-row { max-width: 1100px; margin: 16px auto 0; }
+.group-identity { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.group-switcher {
+  width: min(52vw, 280px);
+  min-height: 38px;
+  border: 1px solid rgba(255,255,255,.32);
+  border-radius: 10px;
+  padding: 0 34px 0 11px;
+  overflow: hidden;
+  color: white;
+  background: rgba(255,255,255,.12);
+  font-weight: 800;
+  text-overflow: ellipsis;
+}
+.group-switcher option { color: var(--ink); background: white; }
+.group-switcher:focus { outline: 3px solid rgba(191, 219, 254, .72); }
 .brand-mark {
   display: grid;
   place-items: center;
@@ -234,7 +249,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px 14px 40px; }
 .slot-meta { color: #3b82f6; font-size: 0.62rem; }
 .slot-state { color: #64748b; font-size: 0.68rem; font-weight: 700; }
 
-.primary-button, .secondary-button, .text-button, .icon-button, .quick-subjects button {
+.primary-button, .secondary-button, .text-button, .icon-button, .danger-button, .quick-subjects button {
   border: 0;
   border-radius: 11px;
   min-height: 42px;
@@ -245,6 +260,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px 14px 40px; }
 .app-header .secondary-button { color: white; border: 1px solid rgba(255,255,255,.28); background: rgba(255,255,255,.12); }
 .text-button { color: var(--navy-800); background: transparent; }
 .text-button.danger { color: var(--danger); }
+.danger-button { padding: 0 18px; color: white; background: var(--danger); }
 .icon-button { width: 42px; padding: 0; color: inherit; background: transparent; font-size: 1.25rem; }
 
 .status-badge {
@@ -303,7 +319,9 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px 14px 40px; }
 .meal-row strong { font-size: 0.88rem; }
 .meal-row span { color: var(--muted); }
 .settings-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 18px; }
-.danger-zone { margin-top: 18px; padding-top: 10px; border-top: 1px solid var(--line); }
+.danger-zone { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-top: 18px; padding-top: 10px; border-top: 1px solid var(--line); }
+.leave-warning { margin-top: 18px; color: #7f1d1d; line-height: 1.65; font-weight: 700; }
+.leave-actions { justify-content: flex-end; }
 
 .toast {
   position: fixed;
@@ -354,6 +372,7 @@ body.focus-timetable .slot-state { font-size: 0.62rem; line-height: 1; }
   .brand-mark { width: 36px; height: 36px; border-radius: 11px; }
   h1 { font-size: 1.28rem; }
   .group-row { margin-top: 9px; }
+  .group-switcher { width: min(55vw, 230px); }
   main { padding: 9px 8px 24px; }
   .summary-card strong { font-size: 1.05rem; }
   .summary-card > div { padding: 9px 8px; }

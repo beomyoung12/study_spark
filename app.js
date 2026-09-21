@@ -7,11 +7,14 @@ const LOCAL_USER_ID = "local-user";
 const STORAGE_KEYS = {
   schedule: "studySparkSchedule.v1",
   profile: "studySparkProfile.v1",
+  activeGroup: "studySparkActiveGroup.v1",
+  accountDeleted: "studySparkAccountDeleted.v1",
 };
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
   groupName: $("#groupName"),
+  groupSwitcher: $("#groupSwitcher"),
   connectionBadge: $("#connectionBadge"),
   inviteButton: $("#inviteButton"),
   openSettings: $("#openSettings"),
@@ -42,6 +45,10 @@ const elements = {
   createGroupButton: $("#createGroupButton"),
   joinGroupButton: $("#joinGroupButton"),
   resetSchedule: $("#resetSchedule"),
+  leaveGroupButton: $("#leaveGroupButton"),
+  leaveDialog: $("#leaveDialog"),
+  leaveWarning: $("#leaveWarning"),
+  confirmLeave: $("#confirmLeave"),
   groupDialog: $("#groupDialog"),
   groupForm: $("#groupForm"),
   groupDialogEyebrow: $("#groupDialogEyebrow"),
@@ -57,6 +64,7 @@ const elements = {
 let supabase = null;
 let currentUserId = LOCAL_USER_ID;
 let currentGroup = null;
+let availableGroups = [];
 let members = [];
 let selectedUserId = LOCAL_USER_ID;
 let editMode = "plan";
@@ -406,10 +414,25 @@ function renderGrid() {
 
 function renderConnection() {
   elements.groupName.textContent = currentGroup?.name ?? "나의 공부방";
+  const canSwitch = availableGroups.length > 1;
+  elements.groupName.hidden = canSwitch;
+  elements.groupSwitcher.hidden = !canSwitch;
+  if (canSwitch) {
+    elements.groupSwitcher.replaceChildren(
+      ...availableGroups.map((group) => {
+        const option = document.createElement("option");
+        option.value = group.id;
+        option.textContent = group.name;
+        return option;
+      }),
+    );
+    elements.groupSwitcher.value = currentGroup?.id ?? availableGroups[0].id;
+  }
   const shared = Boolean(supabase && currentGroup);
   elements.connectionBadge.textContent = shared ? "공유 중" : "체험 모드";
   elements.connectionBadge.className = `status-badge ${shared ? "shared" : "demo"}`;
   elements.inviteButton.disabled = !shared;
+  elements.leaveGroupButton.hidden = !shared;
 }
 
 function renderAll() {
@@ -431,6 +454,7 @@ function markOwnScheduleChanged(message = "저장 중…") {
 }
 
 async function syncOwnSchedule() {
+  if (!supabase || !currentGroup || currentUserId === LOCAL_USER_ID) return;
   try {
     const { error } = await supabase.from("schedules").upsert(
       {
@@ -677,7 +701,7 @@ async function saveProfileName(displayName) {
   saveLocalProfile({ displayName: clean });
   const localMember = members.find((member) => member.id === currentUserId);
   if (localMember) localMember.displayName = clean;
-  if (supabase) {
+  if (supabase && currentUserId !== LOCAL_USER_ID) {
     const { error } = await supabase.from("profiles").upsert({
       id: currentUserId,
       display_name: clean,
@@ -688,7 +712,7 @@ async function saveProfileName(displayName) {
   renderAll();
 }
 
-async function loadGroup(groupId) {
+async function loadGroup(groupId, fallbackOwnSchedule = null) {
   if (!supabase) return;
   setSyncStatus("그룹 불러오는 중…");
   const [{ data: group, error: groupError }, { data: membershipRows, error: memberError }] =
@@ -712,12 +736,20 @@ async function loadGroup(groupId) {
     id,
     displayName: profileMap.get(id) ?? (id === currentUserId ? loadLocalProfile().displayName : "그룹원"),
   }));
+  const nextSchedules = new Map();
   for (const member of members) {
     const row = scheduleRows?.find((item) => item.user_id === member.id);
-    if (row) schedules.set(member.id, normalizeSchedule(row.payload));
-    else if (!schedules.has(member.id)) schedules.set(member.id, defaultSchedule());
+    const schedule = row
+      ? normalizeSchedule(row.payload)
+      : member.id === currentUserId && fallbackOwnSchedule
+        ? normalizeSchedule(fallbackOwnSchedule)
+        : defaultSchedule();
+    nextSchedules.set(member.id, schedule);
   }
+  schedules.clear();
+  for (const [userId, schedule] of nextSchedules) schedules.set(userId, schedule);
   selectedUserId = userIds.includes(selectedUserId) ? selectedUserId : currentUserId;
+  localStorage.setItem(STORAGE_KEYS.activeGroup, groupId);
   setSyncStatus("그룹과 동기화됨");
   subscribeToGroup(groupId);
   renderAll();
@@ -731,9 +763,10 @@ function subscribeToGroup(groupId) {
       "postgres_changes",
       { event: "*", schema: "public", table: "schedules", filter: `group_id=eq.${groupId}` },
       (payload) => {
-        const row = payload.new;
+        const row = payload.new?.user_id ? payload.new : payload.old;
         if (row?.user_id) {
-          schedules.set(row.user_id, normalizeSchedule(row.payload));
+          if (payload.eventType === "DELETE") schedules.delete(row.user_id);
+          else schedules.set(row.user_id, normalizeSchedule(row.payload));
           renderAll();
           setSyncStatus("방금 동기화됨");
         }
@@ -741,20 +774,67 @@ function subscribeToGroup(groupId) {
     )
     .on(
       "postgres_changes",
-      { event: "INSERT", schema: "public", table: "group_members", filter: `group_id=eq.${groupId}` },
-      () => loadGroup(groupId).catch(console.error),
+      { event: "*", schema: "public", table: "group_members", filter: `group_id=eq.${groupId}` },
+      async () => {
+        try {
+          await refreshAvailableGroups();
+          if (currentGroup?.id === groupId) await loadGroup(groupId);
+        } catch (error) {
+          console.error(error);
+        }
+      },
     )
     .subscribe();
 }
 
-async function findExistingGroup() {
-  const { data, error } = await supabase
+async function refreshAvailableGroups() {
+  if (!supabase || currentUserId === LOCAL_USER_ID) {
+    availableGroups = [];
+    return availableGroups;
+  }
+  const { data: memberships, error } = await supabase
     .from("group_members")
-    .select("group_id")
+    .select("group_id,joined_at")
     .eq("user_id", currentUserId)
-    .limit(1);
+    .order("joined_at", { ascending: true });
   if (error) throw error;
-  return data?.[0]?.group_id ?? null;
+  const groupIds = (memberships ?? []).map((row) => row.group_id);
+  if (!groupIds.length) {
+    availableGroups = [];
+    return availableGroups;
+  }
+  const { data: groups, error: groupError } = await supabase
+    .from("groups")
+    .select("id,name,invite_code")
+    .in("id", groupIds);
+  if (groupError) throw groupError;
+  const groupMap = new Map((groups ?? []).map((group) => [group.id, group]));
+  availableGroups = groupIds.map((id) => groupMap.get(id)).filter(Boolean);
+  return availableGroups;
+}
+
+async function ensureAuthenticated(force = false) {
+  if (!supabase) return null;
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) throw sessionError;
+  let session = sessionData.session;
+  if (!session && localStorage.getItem(STORAGE_KEYS.accountDeleted) === "1" && !force) return null;
+  if (!session) {
+    const { data, error } = await supabase.auth.signInAnonymously();
+    if (error) throw error;
+    session = data.session;
+  }
+  if (!session) throw new Error("익명 계정을 만들지 못했습니다.");
+  localStorage.removeItem(STORAGE_KEYS.accountDeleted);
+  if (currentUserId !== session.user.id) {
+    const carriedSchedule = schedules.get(currentUserId) ?? schedules.get(LOCAL_USER_ID) ?? loadLocalSchedule();
+    schedules.clear();
+    schedules.set(session.user.id, carriedSchedule);
+  }
+  currentUserId = session.user.id;
+  selectedUserId = currentUserId;
+  members = [{ id: currentUserId, displayName: loadLocalProfile().displayName }];
+  return session;
 }
 
 async function initBackend() {
@@ -778,28 +858,28 @@ async function initBackend() {
     supabase = createClient(projectUrl, config.supabaseAnonKey, {
       auth: { persistSession: true, autoRefreshToken: true },
     });
-    let { data: sessionData } = await supabase.auth.getSession();
-    let session = sessionData.session;
+    const session = await ensureAuthenticated(false);
     if (!session) {
-      const { data, error } = await supabase.auth.signInAnonymously();
-      if (error) throw error;
-      session = data.session;
+      currentGroup = null;
+      availableGroups = [];
+      setSyncStatus("계정과 데이터가 삭제됨 · 새 그룹을 만들면 새 계정이 생겨요");
+      renderAll();
+      return;
     }
-    currentUserId = session.user.id;
-    selectedUserId = currentUserId;
-    const localSchedule = schedules.get(LOCAL_USER_ID) ?? defaultSchedule();
-    schedules.delete(LOCAL_USER_ID);
-    schedules.set(currentUserId, localSchedule);
     await saveProfileName(localProfile.displayName);
-    const existingGroupId = await findExistingGroup();
+    const localSchedule = ownSchedule();
+    await refreshAvailableGroups();
     const inviteCode = new URLSearchParams(location.search).get("invite")?.trim();
-    if (existingGroupId) await loadGroup(existingGroupId);
+    const invitedGroup = availableGroups.find((group) => group.invite_code === inviteCode?.toUpperCase());
+    const preferredGroupId = invitedGroup?.id ?? localStorage.getItem(STORAGE_KEYS.activeGroup);
+    const existingGroup = availableGroups.find((group) => group.id === preferredGroupId) ?? availableGroups[0];
+    if (existingGroup) await loadGroup(existingGroup.id, availableGroups.length === 1 ? localSchedule : null);
     else {
       members = [{ id: currentUserId, displayName: localProfile.displayName }];
       renderAll();
       setSyncStatus("연결됨 · 그룹을 만들거나 참여하세요");
     }
-    if (inviteCode && !existingGroupId) openGroupDialog("join", inviteCode);
+    if (inviteCode && !invitedGroup) openGroupDialog("join", inviteCode);
   } catch (error) {
     console.error(error);
     const anonymousDisabled = String(error?.message ?? "").includes("Anonymous sign-ins are disabled");
@@ -823,9 +903,94 @@ async function initBackend() {
   }
 }
 
+function clearStoredSupabaseSession() {
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const key = localStorage.key(index);
+    if (key?.startsWith("sb-") && key.endsWith("-auth-token")) localStorage.removeItem(key);
+  }
+}
+
+async function resetAfterAccountDeletion() {
+  if (realtimeChannel && supabase) await supabase.removeChannel(realtimeChannel);
+  realtimeChannel = null;
+  try {
+    await supabase?.auth.signOut({ scope: "local" });
+  } catch (error) {
+    console.warn("Deleted account session cleanup fell back to local storage.", error);
+  }
+  clearStoredSupabaseSession();
+  localStorage.removeItem(STORAGE_KEYS.schedule);
+  localStorage.removeItem(STORAGE_KEYS.profile);
+  localStorage.removeItem(STORAGE_KEYS.activeGroup);
+  localStorage.setItem(STORAGE_KEYS.accountDeleted, "1");
+  const cleanUrl = new URL(location.href);
+  cleanUrl.searchParams.delete("invite");
+  history.replaceState(null, "", cleanUrl);
+  currentUserId = LOCAL_USER_ID;
+  selectedUserId = LOCAL_USER_ID;
+  currentGroup = null;
+  availableGroups = [];
+  members = [{ id: LOCAL_USER_ID, displayName: "나" }];
+  schedules.clear();
+  schedules.set(LOCAL_USER_ID, defaultSchedule());
+  renderAll();
+  setSyncStatus("계정과 모든 내용을 삭제했어요");
+}
+
+function openLeaveDialog() {
+  if (!currentGroup) return;
+  elements.settingsDialog.close();
+  elements.leaveWarning.textContent =
+    availableGroups.length <= 1
+      ? "이 그룹에서 설정한 내용이 모두 사라집니다. 그룹이 하나인 경우, 현재 계정의 모든 내용이 사라집니다."
+      : "이 그룹에서 설정한 내용이 모두 사라집니다.";
+  elements.leaveDialog.showModal();
+}
+
+async function leaveCurrentGroup() {
+  if (!supabase || !currentGroup) return;
+  elements.confirmLeave.disabled = true;
+  elements.confirmLeave.textContent = "처리 중…";
+  const leavingGroupId = currentGroup.id;
+  try {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    const { data, error } = await supabase.rpc("leave_study_group", {
+      p_group_id: leavingGroupId,
+    });
+    if (error) throw error;
+    const result = Array.isArray(data) ? data[0] : data;
+    elements.leaveDialog.close();
+    if (result?.account_deleted) {
+      await resetAfterAccountDeletion();
+      showToast("마지막 그룹과 계정의 모든 내용을 삭제했어요.");
+      return;
+    }
+    currentGroup = null;
+    localStorage.removeItem(STORAGE_KEYS.activeGroup);
+    await refreshAvailableGroups();
+    const nextGroup = availableGroups[0];
+    if (nextGroup) await loadGroup(nextGroup.id);
+    else {
+      members = [{ id: currentUserId, displayName: loadLocalProfile().displayName }];
+      schedules.clear();
+      schedules.set(currentUserId, defaultSchedule());
+      renderAll();
+    }
+    showToast("그룹에서 나갔어요. 해당 그룹의 내 시간표도 삭제됐어요.");
+  } catch (error) {
+    console.error(error);
+    showToast(`그룹 나가기 실패: ${error.message}`);
+  } finally {
+    elements.confirmLeave.disabled = false;
+    elements.confirmLeave.textContent = "예";
+  }
+}
+
 async function handleGroupSubmit(event) {
   event.preventDefault();
   if (!supabase) return;
+  const fallbackSchedule = availableGroups.length === 0 ? ownSchedule() : null;
   const displayName = loadLocalProfile().displayName || "나";
   const functionName = groupDialogMode === "create" ? "create_study_group" : "join_study_group";
   const params =
@@ -843,13 +1008,16 @@ async function handleGroupSubmit(event) {
   elements.groupSubmit.disabled = true;
   elements.groupSubmit.textContent = "처리 중…";
   try {
+    await ensureAuthenticated(true);
+    await saveProfileName(displayName);
     const { data, error } = await supabase.rpc(functionName, params);
     if (error) throw error;
     const result = Array.isArray(data) ? data[0] : data;
     const groupId = result?.group_id ?? result?.id ?? data;
     if (!groupId) throw new Error("그룹 ID를 받지 못했습니다.");
     elements.groupDialog.close();
-    await loadGroup(groupId);
+    await refreshAvailableGroups();
+    await loadGroup(groupId, fallbackSchedule);
     await syncOwnSchedule();
     showToast(groupDialogMode === "create" ? "공부방을 만들었어요." : "공부방에 참여했어요.");
   } catch (error) {
@@ -934,6 +1102,25 @@ function installEventHandlers() {
     elements.displayNameInput.value = loadLocalProfile().displayName;
     elements.settingsDialog.showModal();
   });
+  elements.groupSwitcher.addEventListener("change", async () => {
+    const nextGroupId = elements.groupSwitcher.value;
+    if (!nextGroupId || nextGroupId === currentGroup?.id) return;
+    elements.groupSwitcher.disabled = true;
+    try {
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+        await syncOwnSchedule();
+      }
+      await loadGroup(nextGroupId);
+    } catch (error) {
+      console.error(error);
+      showToast("그룹을 바꾸지 못했어요.");
+      renderConnection();
+    } finally {
+      elements.groupSwitcher.disabled = false;
+    }
+  });
   elements.settingsForm.addEventListener("submit", async (event) => {
     if (event.submitter?.value !== "save") return;
     event.preventDefault();
@@ -960,6 +1147,8 @@ function installEventHandlers() {
     markOwnScheduleChanged();
     showToast("기본 시간표로 되돌렸어요.");
   });
+  elements.leaveGroupButton.addEventListener("click", openLeaveDialog);
+  elements.confirmLeave.addEventListener("click", leaveCurrentGroup);
   elements.inviteButton.addEventListener("click", copyInviteLink);
   elements.groupForm.addEventListener("submit", handleGroupSubmit);
 }
