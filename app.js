@@ -327,14 +327,24 @@ function subjectSegment(schedule, day, slot) {
   return { day, blockStart: block.start, blockEnd: block.end, start, end, subject };
 }
 
-function subjectLabelSpan(schedule, day, slot, block) {
-  const subject = subjectAt(schedule, day, slot);
-  if (!subject) return 0;
-  if (slot > block.start && subjectAt(schedule, day, slot - 1) === subject) return 0;
-  let end = slot;
-  while (end < block.end && subjectAt(schedule, day, end + 1) === subject) end += 1;
-  while (end < block.end && !subjectAt(schedule, day, end + 1)) end += 1;
-  return end - slot + 1;
+function subjectLabelsForBlock(schedule, day, block) {
+  const anchors = [];
+  let previousSubject = "";
+  for (let slot = block.start; slot <= block.end; slot += 1) {
+    const subject = subjectAt(schedule, day, slot);
+    if (!subject || subject === previousSubject) continue;
+    anchors.push({ marker: slot, subject });
+    previousSubject = subject;
+  }
+  return anchors.map((anchor, index) => ({
+    subject: anchor.subject,
+    start: index === 0 ? block.start : anchor.marker,
+    end: index + 1 < anchors.length ? anchors[index + 1].marker - 1 : block.end,
+  }));
+}
+
+function subjectLabelAt(schedule, day, slot, block) {
+  return subjectLabelsForBlock(schedule, day, block).find((label) => label.start === slot) ?? null;
 }
 
 function renderGrid() {
@@ -382,13 +392,16 @@ function renderGrid() {
       cell.style.gridColumn = String(day + 2);
 
       const subject = subjectAt(schedule, day, slot);
-      const subjectSpan = block ? subjectLabelSpan(schedule, day, slot, block) : 0;
-      if (kind === "study" && subject && subjectSpan > 0) {
+      const subjectLabel = block ? subjectLabelAt(schedule, day, slot, block) : null;
+      if (kind === "study" && subjectLabel) {
         cell.classList.add("has-subject-label");
-        cell.style.setProperty("--subject-span", String(subjectSpan));
+        cell.style.setProperty("--subject-span", String(subjectLabel.end - subjectLabel.start + 1));
         const label = document.createElement("span");
         label.className = "slot-subject";
-        label.textContent = subject;
+        label.textContent = subjectLabel.subject;
+        label.title = `${formatTime(minuteForSlot(subjectLabel.start))}–${formatTime(
+          minuteForSlot(subjectLabel.end + 1),
+        )} ${subjectLabel.subject}`;
         cell.append(label);
       } else if (kind === "meal" && slot % 2 === 0) {
         const state = document.createElement("span");
@@ -497,17 +510,17 @@ function openSubjectEditor(day, slot) {
   const schedule = ownSchedule();
   const segment = subjectSegment(schedule, day, slot);
   if (!segment) return;
-  activeSubjectRange = segment;
+  activeSubjectRange = { ...segment, start: slot };
   elements.subjectTime.textContent = `${DAYS[day]}요일 ${formatTime(
-    minuteForSlot(segment.start),
+    minuteForSlot(slot),
   )}부터 계획 입력`;
-  elements.subjectStart.textContent = formatTime(minuteForSlot(segment.start));
+  elements.subjectStart.textContent = formatTime(minuteForSlot(slot));
   elements.subjectEnd.replaceChildren();
-  for (let endSlot = segment.start; endSlot <= segment.blockEnd; endSlot += 1) {
+  for (let endSlot = slot; endSlot <= segment.blockEnd; endSlot += 1) {
     const option = document.createElement("option");
     option.value = String(endSlot);
     option.textContent = formatTime(minuteForSlot(endSlot + 1));
-    option.selected = endSlot === segment.end;
+    option.selected = endSlot === Math.max(slot, segment.end);
     elements.subjectEnd.append(option);
   }
   elements.subjectInput.value = subjectAt(schedule, day, slot);
@@ -556,6 +569,8 @@ function previewResize(state, target) {
 function beginLongPress() {
   if (!pressState) return;
   pressState.long = true;
+  document.body.classList.add("resizing-schedule");
+  pressState.cell?.setPointerCapture?.(pressState.pointerId);
   navigator.vibrate?.(25);
   previewResize(pressState, pressState.slot);
   showToast(`${pressState.edge === "start" ? "시작" : "끝"} 경계를 위·아래로 움직이세요.`);
@@ -582,60 +597,106 @@ function handlePointerDown(event) {
     target: slot,
     long: false,
     pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    cell,
     timer: setTimeout(beginLongPress, 430),
   };
-  cell.setPointerCapture?.(event.pointerId);
 }
 
 function handlePointerMove(event) {
   if (!pressState || event.pointerId !== pressState.pointerId) return;
-  if (!pressState.long) return;
+  if (!pressState.long) {
+    const moved = Math.hypot(event.clientX - pressState.startX, event.clientY - pressState.startY);
+    if (moved > 10) {
+      clearTimeout(pressState.timer);
+      pressState = null;
+      suppressClickUntil = Date.now() + 250;
+    }
+    return;
+  }
   event.preventDefault();
   pressState.target = slotFromPointer(event.clientY);
+  previewResize(pressState, pressState.target);
+}
+
+function handleTouchMove(event) {
+  if (!pressState?.long) return;
+  const touch = event.touches[0];
+  if (!touch) return;
+  event.preventDefault();
+  pressState.target = slotFromPointer(touch.clientY);
   previewResize(pressState, pressState.target);
 }
 
 function applyResize(state) {
   const schedule = ownSchedule();
   const { day, block } = state;
-  const copiedSubject =
-    schedule.subjects[day].slice(block.start, block.end + 1).find((value) => value.trim()) ?? "";
   if (state.edge === "start") {
     const newStart = Math.min(state.target, block.end);
-    for (let slot = Math.min(newStart, block.start); slot <= block.end; slot += 1) {
-      const active = slot >= newStart;
-      if (active && schedule.unavailable[day][slot]) continue;
-      schedule.overrides[day][slot] = active;
-      schedule.subjects[day][slot] = active ? copiedSubject : "";
+    if (newStart < block.start) {
+      const firstSubject =
+        schedule.subjects[day].slice(block.start, block.end + 1).find((value) => value.trim()) ?? "";
+      for (let slot = newStart; slot < block.start; slot += 1) {
+        if (schedule.unavailable[day][slot]) continue;
+        schedule.overrides[day][slot] = true;
+        schedule.subjects[day][slot] = firstSubject;
+      }
+    } else {
+      for (let slot = block.start; slot < newStart; slot += 1) {
+        schedule.overrides[day][slot] = false;
+        schedule.subjects[day][slot] = "";
+      }
     }
   } else {
     const newEnd = Math.max(state.target, block.start);
-    for (let slot = block.start; slot <= Math.max(newEnd, block.end); slot += 1) {
-      const active = slot <= newEnd;
-      if (active && schedule.unavailable[day][slot]) continue;
-      schedule.overrides[day][slot] = active;
-      schedule.subjects[day][slot] = active ? copiedSubject : "";
+    if (newEnd > block.end) {
+      const lastSubject =
+        schedule.subjects[day]
+          .slice(block.start, block.end + 1)
+          .reverse()
+          .find((value) => value.trim()) ?? "";
+      for (let slot = block.end + 1; slot <= newEnd; slot += 1) {
+        if (schedule.unavailable[day][slot]) continue;
+        schedule.overrides[day][slot] = true;
+        schedule.subjects[day][slot] = lastSubject;
+      }
+    } else {
+      for (let slot = newEnd + 1; slot <= block.end; slot += 1) {
+        schedule.overrides[day][slot] = false;
+        schedule.subjects[day][slot] = "";
+      }
     }
   }
   markOwnScheduleChanged();
 }
 
-function finishPointer(event) {
-  if (!pressState || event.pointerId !== pressState.pointerId) return;
+function finishResizeInteraction(shouldApply) {
+  if (!pressState) return;
   clearTimeout(pressState.timer);
-  if (pressState.long) {
+  if (shouldApply && pressState.long) {
     applyResize(pressState);
     suppressClickUntil = Date.now() + 550;
   }
   clearResizePreview();
+  document.body.classList.remove("resizing-schedule");
   pressState = null;
+}
+
+function finishPointer(event) {
+  if (!pressState || event.pointerId !== pressState.pointerId) return;
+  finishResizeInteraction(true);
 }
 
 function cancelPointer(event) {
   if (!pressState || event.pointerId !== pressState.pointerId) return;
-  clearTimeout(pressState.timer);
-  clearResizePreview();
-  pressState = null;
+  finishResizeInteraction(pressState.long);
+}
+
+function finishTouch(event) {
+  if (!pressState?.long) return;
+  event.preventDefault();
+  finishResizeInteraction(true);
 }
 
 function makeTimeOptions(selected, includeEnd = false) {
@@ -1035,6 +1096,9 @@ function installEventHandlers() {
   elements.scheduleGrid.addEventListener("pointermove", handlePointerMove);
   elements.scheduleGrid.addEventListener("pointerup", finishPointer);
   elements.scheduleGrid.addEventListener("pointercancel", cancelPointer);
+  elements.scheduleGrid.addEventListener("touchmove", handleTouchMove, { passive: false });
+  elements.scheduleGrid.addEventListener("touchend", finishTouch, { passive: false });
+  elements.scheduleGrid.addEventListener("touchcancel", finishTouch, { passive: false });
 
   for (const button of document.querySelectorAll("[data-mode]")) {
     button.addEventListener("click", () => {
