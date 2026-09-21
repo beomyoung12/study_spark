@@ -17,7 +17,7 @@
   --study: #dbeafe;
   --study-strong: #2563eb;
   --danger: #b91c1c;
-  --slot-height: 42px;
+  --slot-height: 28px;
   --time-width: 58px;
   --day-width: 88px;
   font-family: Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif;
@@ -115,6 +115,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px 14px 40px; }
 .schedule-card { overflow: hidden; }
 .schedule-toolbar { padding: 16px 16px 10px; }
 .schedule-toolbar p { color: var(--muted); margin-top: 4px; font-size: 0.82rem; }
+.toolbar-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 
 .mode-switch {
   display: grid;
@@ -144,11 +145,12 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px 14px 40px; }
 .legend-off { background: white; }
 
 .schedule-scroller {
-  overflow: auto;
-  max-height: min(68vh, 980px);
+  overflow-x: auto;
+  overflow-y: visible;
   border-top: 1px solid var(--line);
-  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
   touch-action: pan-x pan-y;
+  scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
 }
 .schedule-grid {
@@ -189,7 +191,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px 14px 40px; }
 .slot-cell {
   position: relative;
   min-width: 0;
-  padding: 4px 5px;
+  padding: 2px 5px;
   overflow: hidden;
   border: 0;
   border-right: 1px solid var(--line);
@@ -209,7 +211,26 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px 14px 40px; }
 .slot-cell.busy { color: #64748b; background: repeating-linear-gradient(135deg, #f8fafc, #f8fafc 7px, #e8edf3 7px, #e8edf3 14px); }
 .slot-cell.readonly { cursor: default; }
 .slot-cell.resizing { outline: 3px solid #f59e0b; outline-offset: -3px; z-index: 3; }
-.slot-subject { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.72rem; font-weight: 800; }
+.slot-cell.has-subject-label { overflow: visible; z-index: 2; }
+.slot-subject {
+  position: absolute;
+  inset: 0 3px auto 5px;
+  z-index: 3;
+  display: -webkit-box;
+  height: calc(var(--subject-span, 1) * var(--slot-height));
+  padding: 3px 1px;
+  overflow: hidden;
+  color: var(--navy-900);
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.2;
+  text-align: center;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  pointer-events: none;
+  -webkit-line-clamp: max(1, calc(var(--subject-span, 1) * 2));
+  -webkit-box-orient: vertical;
+}
 .slot-meta { color: #3b82f6; font-size: 0.62rem; }
 .slot-state { color: #64748b; font-size: 0.68rem; font-weight: 700; }
 
@@ -267,6 +288,16 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px 14px 40px; }
 .dialog-note { margin-top: 14px; color: var(--muted); font-size: 0.82rem; line-height: 1.55; }
 .quick-subjects { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
 .quick-subjects button { min-height: 36px; padding: 0 12px; color: var(--navy-800); background: #eff6ff; }
+.subject-range-control {
+  display: grid;
+  grid-template-columns: auto auto minmax(105px, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  color: var(--muted);
+  font-weight: 700;
+}
+.subject-range-control strong { color: var(--ink); }
+.subject-range-control select { min-height: 42px; }
 .meal-fields { display: grid; gap: 14px; margin-top: 18px; }
 .meal-row { display: grid; grid-template-columns: 72px 1fr auto 1fr; gap: 8px; align-items: center; }
 .meal-row strong { font-size: 0.88rem; }
@@ -294,6 +325,22 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px 14px 40px; }
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+body.focus-timetable { background: white; }
+body.focus-timetable .app-header,
+body.focus-timetable .summary-card,
+body.focus-timetable .member-section { display: none; }
+body.focus-timetable main { max-width: none; padding: 0; }
+body.focus-timetable .schedule-card { margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+body.focus-timetable .schedule-toolbar { padding: 8px 10px 6px; }
+body.focus-timetable .schedule-toolbar p,
+body.focus-timetable .legend { display: none; }
+body.focus-timetable .mode-switch { margin: 0 8px 6px; }
+body.focus-timetable .mode-button { min-height: 34px; }
+body.focus-timetable .schedule-grid { --slot-height: clamp(17px, calc((100dvh - 155px) / 32), 22px); }
+body.focus-timetable .schedule-grid { grid-template-rows: 36px repeat(32, var(--slot-height)); }
+body.focus-timetable .slot-subject,
+body.focus-timetable .slot-state { font-size: 0.62rem; line-height: 1; }
+
 @media (min-width: 760px) {
   .app-header { padding-inline: 28px; }
   main { padding: 22px 24px 48px; }
@@ -302,10 +349,31 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px 14px 40px; }
 }
 
 @media (max-width: 520px) {
+  :root { --slot-height: 24px; --time-width: 48px; --day-width: 72px; }
+  .app-header { padding: max(11px, env(safe-area-inset-top)) 12px 11px; }
+  .brand-mark { width: 36px; height: 36px; border-radius: 11px; }
+  h1 { font-size: 1.28rem; }
+  .group-row { margin-top: 9px; }
+  main { padding: 9px 8px 24px; }
   .summary-card strong { font-size: 1.05rem; }
-  .summary-card > div { padding: 13px 10px; }
+  .summary-card > div { padding: 9px 8px; }
+  .summary-card span { margin-bottom: 2px; font-size: 0.7rem; }
+  .member-section, .schedule-card { margin-top: 8px; border-radius: 13px; }
+  .member-section { padding: 9px; }
+  .member-tabs { padding-top: 7px; }
+  .member-tab { padding: 7px 11px; }
   .schedule-toolbar { align-items: flex-start; }
+  .schedule-toolbar { padding: 10px 10px 7px; }
+  .schedule-toolbar p { font-size: 0.72rem; }
+  .toolbar-actions { max-width: 145px; }
+  .toolbar-actions .secondary-button { min-height: 34px; padding: 0 9px; font-size: 0.72rem; }
+  .mode-switch { margin-inline: 8px; }
   .mode-button { font-size: 0.78rem; padding-inline: 4px; }
+  .legend { gap: 6px 10px; padding: 7px 10px; font-size: 0.68rem; }
+  .schedule-grid { grid-template-rows: 38px repeat(32, var(--slot-height)); }
+  .time-label { padding-top: 2px; font-size: 0.6rem; }
+  .slot-subject { font-size: 0.63rem; }
+  .slot-state { font-size: 0.6rem; }
   .settings-actions { grid-template-columns: 1fr; }
 }
 

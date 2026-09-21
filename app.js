@@ -23,12 +23,15 @@ const elements = {
   scheduleTitle: $("#scheduleTitle"),
   modeHint: $("#modeHint"),
   mealButton: $("#mealButton"),
+  focusTimetable: $("#focusTimetable"),
   scheduleGrid: $("#scheduleGrid"),
   toast: $("#toast"),
   subjectDialog: $("#subjectDialog"),
   subjectForm: $("#subjectForm"),
   subjectTime: $("#subjectTime"),
   subjectInput: $("#subjectInput"),
+  subjectStart: $("#subjectStart"),
+  subjectEnd: $("#subjectEnd"),
   clearSubject: $("#clearSubject"),
   mealDialog: $("#mealDialog"),
   mealForm: $("#mealForm"),
@@ -295,6 +298,37 @@ function subjectAt(schedule, day, slot) {
   return schedule.subjects[day][slot]?.trim() ?? "";
 }
 
+function subjectSegment(schedule, day, slot) {
+  const block = findBlock(schedule, day, slot);
+  if (!block) return null;
+  const subject = subjectAt(schedule, day, slot);
+  if (!subject) {
+    return {
+      day,
+      blockStart: block.start,
+      blockEnd: block.end,
+      start: slot,
+      end: slot,
+      subject: "",
+    };
+  }
+  let start = slot;
+  let end = slot;
+  while (start > block.start && subjectAt(schedule, day, start - 1) === subject) start -= 1;
+  while (end < block.end && subjectAt(schedule, day, end + 1) === subject) end += 1;
+  return { day, blockStart: block.start, blockEnd: block.end, start, end, subject };
+}
+
+function subjectLabelSpan(schedule, day, slot, block) {
+  const subject = subjectAt(schedule, day, slot);
+  if (!subject) return 0;
+  if (slot > block.start && subjectAt(schedule, day, slot - 1) === subject) return 0;
+  let end = slot;
+  while (end < block.end && subjectAt(schedule, day, end + 1) === subject) end += 1;
+  while (end < block.end && !subjectAt(schedule, day, end + 1)) end += 1;
+  return end - slot + 1;
+}
+
 function renderGrid() {
   const schedule = selectedSchedule();
   const own = selectedUserId === currentUserId;
@@ -340,7 +374,10 @@ function renderGrid() {
       cell.style.gridColumn = String(day + 2);
 
       const subject = subjectAt(schedule, day, slot);
-      if (kind === "study" && subject && (!block || block.start === slot)) {
+      const subjectSpan = block ? subjectLabelSpan(schedule, day, slot, block) : 0;
+      if (kind === "study" && subject && subjectSpan > 0) {
+        cell.classList.add("has-subject-label");
+        cell.style.setProperty("--subject-span", String(subjectSpan));
         const label = document.createElement("span");
         label.className = "slot-subject";
         label.textContent = subject;
@@ -434,12 +471,21 @@ function toggleCell(day, slot) {
 
 function openSubjectEditor(day, slot) {
   const schedule = ownSchedule();
-  const block = findBlock(schedule, day, slot);
-  if (!block) return;
-  activeSubjectRange = block;
+  const segment = subjectSegment(schedule, day, slot);
+  if (!segment) return;
+  activeSubjectRange = segment;
   elements.subjectTime.textContent = `${DAYS[day]}요일 ${formatTime(
-    minuteForSlot(block.start),
-  )}–${formatTime(minuteForSlot(block.end + 1))}`;
+    minuteForSlot(segment.start),
+  )}부터 계획 입력`;
+  elements.subjectStart.textContent = formatTime(minuteForSlot(segment.start));
+  elements.subjectEnd.replaceChildren();
+  for (let endSlot = segment.start; endSlot <= segment.blockEnd; endSlot += 1) {
+    const option = document.createElement("option");
+    option.value = String(endSlot);
+    option.textContent = formatTime(minuteForSlot(endSlot + 1));
+    option.selected = endSlot === segment.end;
+    elements.subjectEnd.append(option);
+  }
   elements.subjectInput.value = subjectAt(schedule, day, slot);
   elements.subjectDialog.showModal();
   setTimeout(() => elements.subjectInput.focus(), 30);
@@ -728,7 +774,8 @@ async function initBackend() {
     const { createClient } = await import(
       "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm"
     );
-    supabase = createClient(config.supabaseUrl, config.supabaseAnonKey, {
+    const projectUrl = new URL(config.supabaseUrl).origin;
+    supabase = createClient(projectUrl, config.supabaseAnonKey, {
       auth: { persistSession: true, autoRefreshToken: true },
     });
     let { data: sessionData } = await supabase.auth.getSession();
@@ -755,15 +802,24 @@ async function initBackend() {
     if (inviteCode && !existingGroupId) openGroupDialog("join", inviteCode);
   } catch (error) {
     console.error(error);
+    const anonymousDisabled = String(error?.message ?? "").includes("Anonymous sign-ins are disabled");
     supabase = null;
     currentUserId = LOCAL_USER_ID;
     selectedUserId = LOCAL_USER_ID;
     schedules.clear();
     schedules.set(LOCAL_USER_ID, loadLocalSchedule());
     members = [{ id: LOCAL_USER_ID, displayName: localProfile.displayName }];
-    setSyncStatus("공유 연결 실패 · 이 기기에 저장됨");
+    setSyncStatus(
+      anonymousDisabled
+        ? "Supabase 연결됨 · Anonymous 로그인을 켜 주세요"
+        : "공유 연결 실패 · 이 기기에 저장됨",
+    );
     renderAll();
-    showToast("공유 서버 연결에 실패했어요. config.js와 Supabase 설정을 확인하세요.");
+    showToast(
+      anonymousDisabled
+        ? "Supabase Authentication에서 Anonymous Sign-Ins를 켜 주세요."
+        : "공유 서버 연결에 실패했어요. config.js와 Supabase 설정을 확인하세요.",
+    );
   }
 }
 
@@ -824,7 +880,12 @@ function installEventHandlers() {
     if (event.submitter?.value !== "save" || !activeSubjectRange) return;
     const schedule = ownSchedule();
     const value = elements.subjectInput.value.trim().slice(0, 40);
-    for (let slot = activeSubjectRange.start; slot <= activeSubjectRange.end; slot += 1) {
+    const selectedEnd = Number(elements.subjectEnd.value);
+    const clearThrough = Math.max(activeSubjectRange.end, selectedEnd);
+    for (let slot = activeSubjectRange.start; slot <= clearThrough; slot += 1) {
+      schedule.subjects[activeSubjectRange.day][slot] = "";
+    }
+    for (let slot = activeSubjectRange.start; slot <= selectedEnd; slot += 1) {
       schedule.subjects[activeSubjectRange.day][slot] = value;
     }
     markOwnScheduleChanged();
@@ -844,6 +905,12 @@ function installEventHandlers() {
   elements.mealButton.addEventListener("click", () => {
     renderMealFields();
     elements.mealDialog.showModal();
+  });
+  elements.focusTimetable.addEventListener("click", () => {
+    const enabled = document.body.classList.toggle("focus-timetable");
+    elements.focusTimetable.textContent = enabled ? "전체화면 나가기" : "시간표만 보기";
+    elements.focusTimetable.setAttribute("aria-pressed", String(enabled));
+    if (enabled) window.scrollTo({ top: 0, behavior: "smooth" });
   });
   elements.mealForm.addEventListener("submit", (event) => {
     if (event.submitter?.value !== "save") return;

@@ -134,7 +134,7 @@ begin
   if char_length(trim(p_display_name)) not between 1 and 16 then raise exception 'invalid display name'; end if;
 
   loop
-    v_invite_code := upper(substr(encode(gen_random_bytes(6), 'hex'), 1, 10));
+    v_invite_code := upper(substr(encode(extensions.gen_random_bytes(6), 'hex'), 1, 10));
     exit when not exists (select 1 from public.groups g where g.invite_code = v_invite_code);
   end loop;
 

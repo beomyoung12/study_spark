@@ -7,7 +7,7 @@
     <meta name="description" content="친구들과 주간 공부시간을 계획하고 공유하는 모바일 시간표" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=4" />
     <title>공부불씨</title>
   </head>
   <body>
@@ -59,7 +59,10 @@
             <h2 id="scheduleTitle">내 공부시간표</h2>
             <p id="modeHint">블록을 누르면 공부 내용을 적을 수 있어요.</p>
           </div>
-          <button id="mealButton" class="secondary-button" type="button">식사시간</button>
+          <div class="toolbar-actions">
+            <button id="focusTimetable" class="secondary-button" type="button">시간표만 보기</button>
+            <button id="mealButton" class="secondary-button" type="button">식사시간</button>
+          </div>
         </div>
 
         <div class="mode-switch" role="group" aria-label="시간표 편집 방식">
@@ -95,6 +98,15 @@
         <label>
           공부 내용
           <input id="subjectInput" maxlength="40" autocomplete="off" placeholder="예: 민법 사례집 1~20번" />
+        </label>
+        <label>
+          적용 시간
+          <span class="subject-range-control">
+            <strong id="subjectStart">09:00</strong>
+            <span>부터</span>
+            <select id="subjectEnd" aria-label="공부 내용 적용 종료시간"></select>
+            <span>까지</span>
+          </span>
         </label>
         <div class="quick-subjects">
           <button type="button" data-subject="민법">민법</button>
@@ -176,7 +188,7 @@
       </form>
     </dialog>
 
-    <script src="./config.js"></script>
-    <script type="module" src="./app.js"></script>
+    <script src="./config.js?v=2"></script>
+    <script type="module" src="./app.js?v=5"></script>
   </body>
 </html>
